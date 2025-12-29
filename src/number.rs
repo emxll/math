@@ -25,6 +25,76 @@ pub enum DigitBuf<'a, Digit: PrimitiveInteger> {
     Single([Digit; 1]),
 }
 
+fn abs_add_into<Digit: PrimitiveInteger>(
+    left: &[Digit],
+    right: &[Digit],
+    out: &mut [Digit],
+    //the minimum required space of the addition
+    output_max_digits: usize,
+) {
+    assert!(out.len() >= output_max_digits);
+
+    let left_iter = left.into_iter().map(|e| *e).chain(repeat(Digit::default()));
+    let right_iter = right
+        .into_iter()
+        .map(|e| *e)
+        .chain(repeat(Digit::default()));
+
+    //shouldn't produce overflow
+    assert!(
+        !out.iter_mut()
+            .take(output_max_digits)
+            .zip(left_iter.zip(right_iter))
+            .fold(false, |carry, (slot, (left, right))| {
+                let (v, carry) = left.add_with_carry(carry, &right);
+                *slot = v;
+                carry
+            })
+    );
+}
+
+// Subtract a SMALLER number (other) from a LARGER number (self)
+// and store the result in buf
+//
+// RETURNS: The bit length of the result
+fn abs_sub_into<Digit: PrimitiveInteger>(
+    left: &[Digit],
+    right: &[Digit],
+    out: &mut [Digit],
+    //the minimum required space of the subtraction
+    output_max_digits: usize,
+) -> usize {
+    assert!(out.len() >= output_max_digits);
+
+    let left_iter = left.into_iter().map(|e| *e).chain(repeat(Digit::default()));
+    let right_iter = right
+        .into_iter()
+        .map(|e| *e)
+        .chain(repeat(Digit::default()));
+
+    //shouldn't produce overflow
+    assert!(
+        !out.iter_mut()
+            .take(output_max_digits)
+            .zip(left_iter.zip(right_iter))
+            .fold(false, |carry, (slot, (left, right))| {
+                let (v, carry) = left.sub_with_borrow(carry, &right);
+                *slot = v;
+                carry
+            })
+    );
+
+    out.iter()
+        .take(output_max_digits)
+        .enumerate()
+        .rev()
+        .filter_map(|(i, digit)| {
+            (*digit != Digit::default()).then(|| i * Digit::bit_capacity() + digit.bit_len())
+        })
+        .next()
+        .expect("Digit subtraction doesn't produce 0")
+}
+
 impl<Digit: PrimitiveInteger> DigitBuf<'_, Digit> {
     fn inner(&self) -> &[Digit] {
         match self {
@@ -64,96 +134,33 @@ impl<Digit: PrimitiveInteger> DigitBuf<'_, Digit> {
         }
         DigitBuf::Owned(vec![Digit::default(); digits].into_boxed_slice())
     }
+}
 
-    fn abs_add_into<'a>(
-        &self,
-        other: &DigitBuf<'_, Digit>,
-        buf: &mut DigitBuf<'a, Digit>,
-        //the minimum required space of
-        output_max_digits: usize,
-    ) {
-        let digits = buf.inner_mut();
-        assert!(digits.len() >= output_max_digits);
+fn abs_cmp<Digit: PrimitiveInteger>(left: &[Digit], right: &[Digit]) -> Ordering {
+    assert!(left.len() == right.len());
+    left.iter()
+        .zip(right.iter())
+        .rev()
+        .map(|(my_digit, other_digit)| my_digit.cmp(other_digit))
+        .filter(|ord| *ord != Ordering::Equal)
+        .next()
+        .unwrap_or(Ordering::Equal)
+}
 
-        let left_iter = self
-            .inner()
-            .into_iter()
-            .map(|e| *e)
-            .chain(repeat(Digit::default()));
-        let right_iter = other
-            .inner()
-            .into_iter()
-            .map(|e| *e)
-            .chain(repeat(Digit::default()));
-
-        //shouldn't produce overflow
-        assert!(
-            !digits
-                .iter_mut()
-                .take(output_max_digits)
-                .zip(left_iter.zip(right_iter))
-                .fold(false, |carry, (slot, (left, right))| {
-                    let (v, carry) = left.add_with_carry(carry, &right);
-                    *slot = v;
-                    carry
-                })
-        );
-    }
-
-    // Subtract a SMALLER number (other) from a LARGER number (self)
-    // and store the result in buf
-    //
-    // RETURNS: The bit length of the resulting DigitBuf
-    fn abs_sub_into<'a>(
-        &self,
-        other: &DigitBuf<'_, Digit>,
-        buf: &mut DigitBuf<'a, Digit>,
-        //the minimum required space of the subtraction
-        output_max_digits: usize,
-    ) -> usize {
-        let digits = buf.inner_mut();
-        assert!(digits.len() >= output_max_digits);
-
-        let left_iter = self
-            .inner()
-            .into_iter()
-            .map(|e| *e)
-            .chain(repeat(Digit::default()));
-        let right_iter = other
-            .inner()
-            .into_iter()
-            .map(|e| *e)
-            .chain(repeat(Digit::default()));
-
-        //shouldn't produce overflow
-        assert!(
-            !digits
-                .iter_mut()
-                .take(output_max_digits)
-                .zip(left_iter.zip(right_iter))
-                .fold(false, |carry, (slot, (left, right))| {
-                    let (v, carry) = left.sub_with_borrow(carry, &right);
-                    *slot = v;
-                    carry
-                })
-        );
-
-        digits
-            .iter()
-            .take(output_max_digits)
-            .enumerate()
-            .rev()
-            .filter_map(|(i, digit)| {
-                (*digit != Digit::default()).then(|| i * Digit::bit_capacity() + digit.bit_len())
-            })
-            .next()
-            .expect("DigitBuf subtraction doesn't produce 0")
-    }
+fn karatsuba<Digit: PrimitiveInteger>(
+    a: &[Digit],
+    b: &[Digit],
+    out: &mut [Digit],
+    tmp: &mut [Digit],
+) {
+    assert!(a.len() == b.len());
+    let high = a.len() / 2;
+    let low = a.len() - high;
 }
 
 #[derive(Debug)]
 pub struct GenericInteger<'buf, Digit: PrimitiveInteger> {
-    //is only guaranteed to be sane up to the bit indicated by 'bits'
+    //is only guaranteed to be sane up to the digit indicated by 'bits'
     digits: DigitBuf<'buf, Digit>,
     // 0 by convention iff the number is zero
     bits: usize,
@@ -176,16 +183,10 @@ impl<Digit: PrimitiveInteger> GenericInteger<'_, Digit> {
             return self.bits.cmp(&other.bits);
         }
         let cmp_digits = Digit::bits_to_digits(self.bits);
-        self.digits
-            .inner()
-            .iter()
-            .zip(other.digits.inner().iter())
-            .take(cmp_digits)
-            .rev()
-            .map(|(my_digit, other_digit)| my_digit.cmp(other_digit))
-            .filter(|ord| *ord != Ordering::Equal)
-            .next()
-            .unwrap_or(Ordering::Equal)
+        abs_cmp(
+            &self.digits.inner()[..cmp_digits],
+            &other.digits.inner()[..cmp_digits],
+        )
     }
 
     fn cmp(&self, other: &GenericInteger<'_, Digit>) -> std::cmp::Ordering {
@@ -225,9 +226,12 @@ impl<Digit: PrimitiveInteger> GenericInteger<'_, Digit> {
                 Ordering::Greater => (self, other),
             };
             let output_digits = Digit::bits_to_digits(self.subtractive_size_bound(other));
-            let bits = big
-                .digits
-                .abs_sub_into(&small.digits, &mut buf, output_digits);
+            let bits = abs_sub_into(
+                big.digits.inner(),
+                small.digits.inner(),
+                buf.inner_mut(),
+                output_digits,
+            );
             GenericInteger {
                 digits: buf,
                 bits,
@@ -236,9 +240,12 @@ impl<Digit: PrimitiveInteger> GenericInteger<'_, Digit> {
         } else {
             let output_bits = self.additive_size_bound(other);
             let output_digits = Digit::bits_to_digits(output_bits);
-
-            self.digits
-                .abs_add_into(&other.digits, &mut buf, output_digits);
+            abs_add_into(
+                self.digits.inner(),
+                other.digits.inner(),
+                buf.inner_mut(),
+                output_digits,
+            );
 
             GenericInteger {
                 bits: if buf.get_bit(output_bits - 1) {
@@ -266,6 +273,12 @@ impl<Digit: PrimitiveInteger> GenericInteger<'_, Digit> {
         buf: DigitBuf<'a, Digit>,
     ) -> GenericInteger<'a, Digit> {
         self.addsub_multiplex_into(other, true, buf)
+    }
+
+    fn mul_karazuba(&self, other: &GenericInteger<'_, Digit>) -> GenericInteger<'static, Digit> {
+        let out_buf = DigitBuf::<'static, Digit>::new(self.bits + other.bits);
+
+        todo!()
     }
 }
 
